@@ -61,7 +61,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable oled.service
 sudo systemctl start oled.service
 ```
-
 The script includes a hotfix at the beginning to bypass a known Blinka/Microcontroller initialization bug present in Python 3.12+ environments.
 
 Make sure to drop your preferred .ttf font file into the project root directory and rename it to fuente_reloj.ttf.
+
+## 4. Google Calendar Integration (Optional)
+To enable the next meeting display on screen 5:
+1. Go to the Google Cloud Console and enable the Google Calendar API.
+2. Download your `credentials.json` file.
+3. Place `credentials.json` in the root directory of this project.
+4. Run the script; it will prompt you to authenticate via browser on the first run.
