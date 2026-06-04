@@ -17,3 +17,7 @@ __pycache__/
 # Configuración local de editores (opcional)
 .vscode/
 .idea/
+
+# Google Calendar API Secrets
+credentials.json
+token.json
