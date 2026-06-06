@@ -23,6 +23,18 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+# ... después de tus imports ...
+from fastapi import FastAPI
+import uvicorn
+
+# Estado global para control externo
+shared_state = {
+    "manual_mode": False,
+    "target_screen": None
+}
+
+app = FastAPI()
+
 # Global variables for the calendar background thread
 next_meeting_title = "Loading..."
 next_meeting_time = ""
@@ -63,6 +75,29 @@ draw = ImageDraw.Draw(image)
 
 outdoor_temp = "--"
 
+shared_state = {
+    "manual_mode": False,
+    "target_screen": None,
+    "last_screen_change": time.time()
+}
+
+@app.post("/set-screen/{screen_name}")
+async def set_screen(screen_name: str):
+    shared_state["manual_mode"] = True
+    shared_state["target_screen"] = screen_name
+    return {"status": "success", "requested_screen": screen_name}
+
+@app.post("/resume-auto")
+async def resume_auto():
+    global last_screen_change
+    shared_state["manual_mode"] = False
+    shared_state["last_screen_change"] = time.time()  # Reset timer to avoid instant switch
+    print("Resuming automatic screen rotation")
+    return {"status": "auto mode resumed"}
+
+def run_server():
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
 def show_splash():
     # Cargar la imagen directamente al objeto de imagen de la pantalla
     splash = Image.open('splash_welcome.bmp').convert('1')
@@ -90,8 +125,7 @@ def update_calendar_loop():
                     continue
             
             service = build('calendar', 'v3', credentials=creds)
-            now = datetime.datetime.utcnow().isoformat() + 'Z'
-            
+            now = datetime.datetime.now(datetime.UTC)
             events_result = service.events().list(calendarId='primary', timeMin=now,
                                                   maxResults=1, singleEvents=True,
                                                   orderBy='startTime').execute()
@@ -99,7 +133,7 @@ def update_calendar_loop():
             
             if not events:
                 next_meeting_title = "No meetings today"
-                next_meeting_time = "Day off! 😎"
+                next_meeting_time = "Day off!"
             else:
                 event = events[0]
                 summary = event.get('summary', 'Untitled Meeting')
@@ -261,56 +295,53 @@ def screen_calendar(draw):
 
 # Lista maestra de pantallas
 screens = [
-    {"name": "clock", "draw": screen_clock, "timeout": 5, "enabled": True},
+    {"name": "clock", "draw": screen_clock, "timeout": 6, "enabled": True},
     {"name": "performance", "draw": screen_performance, "timeout": 3, "enabled": True},
     {"name": "sensors", "draw": screen_sensors, "timeout": 3, "enabled": True},
     {"name": "network", "draw": screen_network, "timeout": 3, "enabled": False},
     {"name": "net-traffic", "draw": screen_nettraffic, "timeout": 3, "enabled": True},
-    {"name": "calendar", "draw": screen_calendar, "timeout": 10, "enabled": calendar_enabled}
+    {"name": "calendar", "draw": screen_calendar, "timeout": 8, "enabled": calendar_enabled}
 ]
 
-# Filtrar solo las que están habilitadas
 active_screens = [s for s in screens if s["enabled"]]
 current_index = 0
 scroll_x = 0
-
-show_splash()
-draw.rectangle((0, 0, oled.width, oled.height), outline=0, fill=0)
-
 current_screen = 0
-last_screen_change = time.time()
 
-if os.path.exists(credentials_path):
-    calendar_enabled = True
-    threading.Thread(target=update_calendar_loop, daemon=True).start()
-else:
-    print("[WARNING] credentials.json not found. Calendar screen will be skipped.")
+if __name__ == "__main__":
+    threading.Thread(target=run_server, daemon=True).start()
 
-screens[5]["enabled"] = calendar_enabled # Aseguramos el estado
-active_screens = [s for s in screens if s["enabled"]]
-
-while True:
-    if time.time() - last_network_update > 300:
-        update_weather()
-        last_network_update = time.time()
-    calculate_network_speed()
-    
-    # Obtener configuración actual
-    current_screen_cfg = active_screens[current_index]
-    
-    # Limpiar canvas
+    show_splash()
     draw.rectangle((0, 0, oled.width, oled.height), outline=0, fill=0)
-    
-    # Dibujar la pantalla actual llamando a su función
-    current_screen_cfg["draw"](draw)
-    # print(f"Showing screen: {current_screen_cfg['name']} (Scroll X: {scroll_x})")
-    oled.image(image)
-    oled.show()
-    
-    # Gestión de tiempo y cambio
-    if time.time() - last_screen_change > current_screen_cfg["timeout"]:
-        current_index = (current_index + 1) % len(active_screens)
-        last_screen_change = time.time()
-        scroll_x = 0 # Reset para scroll
-    
-    time.sleep(0.2)
+
+    if os.path.exists(credentials_path):
+        calendar_enabled = True
+        threading.Thread(target=update_calendar_loop, daemon=True).start()
+    else:
+        print("[WARNING] credentials.json not found. Calendar screen will be skipped.")
+
+    screens[5]["enabled"] = calendar_enabled
+    active_screens = [s for s in screens if s["enabled"]]
+
+    while True:
+        if time.time() - last_network_update > 300:
+            update_weather()
+            last_network_update = time.time()
+        calculate_network_speed()
+        
+        if shared_state["manual_mode"]:
+            for i, s in enumerate(active_screens):
+                if s["name"] == shared_state["target_screen"]:
+                    current_index = i
+                    break
+        else:
+            if time.time() - shared_state["last_screen_change"] > active_screens[current_index]["timeout"]:
+                current_index = (current_index + 1) % len(active_screens)
+                shared_state["last_screen_change"] = time.time()
+                scroll_x = 0
+        
+        current_screen_cfg = active_screens[current_index]
+        draw.rectangle((0, 0, oled.width, oled.height), outline=0, fill=0)
+        current_screen_cfg["draw"](draw)
+        oled.image(image)
+        oled.show()
