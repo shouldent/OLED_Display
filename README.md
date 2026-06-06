@@ -71,3 +71,56 @@ To enable the next meeting display on screen 5:
 2. Download your `credentials.json` file.
 3. Place `credentials.json` in the root directory of this project.
 4. Run the script; it will prompt you to authenticate via browser on the first run.
+
+## 5. Jarvis OLED Dashboard
+
+An autonomous OLED display system for Linux PCs, featuring a built-in API and a sleek Cinnamon Desktop integration.
+
+### Features
+- **Autonomous OLED Control:** Automatically cycles through hardware metrics (CPU, RAM, Temp, Network, Calendar).
+- **Embedded API:** Built with FastAPI to allow remote control of the display.
+- **Cinnamon Desklet:** A custom desktop widget to switch screens on-the-fly.
+- **Google Calendar Integration:** Displays upcoming meetings automatically.
+
+### Setup & Installation
+
+#### 1. Prerequisites
+Ensure you have the necessary dependencies installed:
+```bash
+pip install adafruit-blinka psutil requests fastapi uvicorn google-api-python-client
+```
+#### 2. Running as a System Service
+
+To ensure the script runs automatically at startup, create a service file:
+```bash
+udo nano /etc/systemd/system/jarvis-oled.service
+
+[Unit]
+Description=Jarvis OLED Display Service
+After=network.target
+
+[Service]
+User=your_username
+WorkingDirectory=/path/to/your/OLED_Display
+Environment=BLINKA_FT232H=1
+ExecStart=/path/to/your/OLED_Display/venv/bin/python OLED_full.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+_Don't forget to replace **your_username** and paths._
+
+#### 3. Cinnamon Desklet Integration
+
+You can control the OLED screen directly from your desktop.
+
+1. Install: Move the desklet folder to ~/.local/share/cinnamon/desklets/.
+2. Activate: Right-click on your desktop -> "Add Desklets" -> Select "Jarvis Control".
+3. Customize: Edit stylesheet.css inside the desklet folder to adjust the interface (colors, borders, transparency).
+
+#### 4. Configuration
+
+1. Hardware: If you are using a USB-I2C adapter, ensure the correct BLINKA environment variable is set in your service file.
+2. Calendar: Place your credentials.json in the project root to enable the calendar screen.

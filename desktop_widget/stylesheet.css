@@ -1,0 +1,20 @@
+.jarvis-box {
+    background-color: rgba(0, 0, 0, 0.8);
+    border: 1px solid #00ffcc;
+    padding: 10px;
+    border-radius: 5px;
+}
+
+.jarvis-button {
+    background-color: #222;
+    color: #00ffcc;
+    padding: 5px;
+    margin: 2px;
+    border: 1px solid #00ffcc;
+    text-align: center;
+}
+
+.jarvis-button:hover {
+    background-color: #00ffcc;
+    color: #000;
+}

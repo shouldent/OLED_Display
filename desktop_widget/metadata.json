@@ -1,0 +1,7 @@
+{
+    "uuid": "jarvis_control_v2@your_username",
+    "name": "Jarvis Desklet Control",
+    "description": "OLED display control for Jarvis Desklet",
+    "icon": "computer",
+    "api-version": 1
+}
