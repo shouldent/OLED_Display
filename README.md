@@ -21,7 +21,7 @@ _Note: I will be adding new features like a 3D Printed box to mount it under the
 
 ### 1. Clone the repository and set up the environment
 ```bash
-git clone [https://github.com/YOUR_USERNAME/OLED_Display.git](https://github.com/YOUR_USERNAME/OLED_Display.git)
+git clone https://github.com/shouldent/OLED_Display.git
 cd OLED_Display
 
 # Create and activate virtual environment
@@ -29,7 +29,7 @@ python3 -m venv venv
 source venv/bin/activate
 
 # Install dependencies
-pip install adafruit-circuitpython-ssd1306 psutil requests Pillow
+pip install -r requirements.txt
 ```
 
 ### 2. Configure the Linux Service (Systemd)
