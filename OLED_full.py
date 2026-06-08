@@ -125,7 +125,7 @@ def update_calendar_loop():
                     continue
             
             service = build('calendar', 'v3', credentials=creds)
-            now = datetime.datetime.now(datetime.UTC)
+            now = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
             events_result = service.events().list(calendarId='primary', timeMin=now,
                                                   maxResults=1, singleEvents=True,
                                                   orderBy='startTime').execute()
@@ -163,6 +163,7 @@ def update_calendar_loop():
                 next_meeting_title = summary
                 
         except Exception as e:
+            print(f"[ERROR] Calendar update failed: {e}")
             next_meeting_title = "Calendar Error"
             next_meeting_time = ""
             
