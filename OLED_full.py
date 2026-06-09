@@ -45,7 +45,13 @@ last_scroll_update = time.time()
 
 # --- INTERNET SETTINGS ---
 CITY = "Mexico"  # Change this to your preferred city or location
-outdoor_temp = "--"
+weather_data = {
+    "temperature": "--",
+    "condition": "Unknown",
+    "humidity": "--",
+    "wind_speed": "--"
+}
+
 last_network_update = 0
 
 # --- NETWORK SPEED CONTROL VARIABLES ---
@@ -73,7 +79,7 @@ calendar_enabled = False
 image = Image.new("1", (oled.width, oled.height))
 draw = ImageDraw.Draw(image)
 
-outdoor_temp = "--"
+interrupt_event = threading.Event()
 
 shared_state = {
     "manual_mode": False,
@@ -81,11 +87,27 @@ shared_state = {
     "last_screen_change": time.time()
 }
 
+@app.post("/set-active/{screen_id}/{state}")
+async def set_active(screen_id: str, state: str):
+    new_state = (state == 'enable')
+    for s in screens:
+        if s["name"] == screen_id:
+            s["enabled"] = new_state
+            break
+    return {"message": "OK", "screen": screen_id, "enabled": new_state}
+
+# @app.post("/set-screen/{screen_name}")
+# async def set_screen(screen_name: str):
+#     shared_state["manual_mode"] = True
+#     shared_state["target_screen"] = screen_name
+#     return {"status": "success", "requested_screen": screen_name}
+
 @app.post("/set-screen/{screen_name}")
 async def set_screen(screen_name: str):
     shared_state["manual_mode"] = True
     shared_state["target_screen"] = screen_name
-    return {"status": "success", "requested_screen": screen_name}
+    print(f"--- API RECIBIÓ: Manual mode ON, objetivo: {screen_name} ---")
+    return {"status": "ok"}
 
 @app.post("/resume-auto")
 async def resume_auto():
@@ -94,6 +116,19 @@ async def resume_auto():
     shared_state["last_screen_change"] = time.time()  # Reset timer to avoid instant switch
     print("Resuming automatic screen rotation")
     return {"status": "auto mode resumed"}
+
+@app.post("/set-mode/auto")
+async def set_mode_auto():
+    shared_state["manual_mode"] = False
+    shared_state["last_screen_change"] = time.time() # Reseteamos el contador para que empiece de cero
+    return {"status": "auto_mode_active"}
+
+# En tu bucle, reemplaza time.sleep(segundos) por esto:
+def wait_or_interrupt(seconds):
+    # Esto espera 'seconds' a menos que alguien haga interrupt_event.set()
+    interrupt_event.wait(seconds)
+    # Limpiamos el evento para la próxima vuelta
+    interrupt_event.clear()
 
 def run_server():
     uvicorn.run(app, host="0.0.0.0", port=8000)
@@ -229,21 +264,63 @@ def get_cpu_temp():
     return "N/A"
 
 def update_weather():
-    global outdoor_temp
+    global weather_data
     try:
-        weather_resp = requests.get(f"https://wttr.in/{CITY}?format=%t", timeout=3)
+        url = f"https://wttr.in/{CITY}?format=%t;%C;%h;%w"
+        weather_resp = requests.get(url, timeout=3)
         if weather_resp.status_code == 200:
-            outdoor_temp = weather_resp.text.strip().replace("+", "").replace("°C", "")
+            data = weather_resp.text.split(";")
+            weather_data["temperature"] = data[0].replace("+", "").replace("°C", "")
+            weather_data["condition"] = get_simple_condition(data[1])
+            weather_data["humidity"] = data[2]
+            weather_data["wind_speed"] = data[3]
+
+            print(f"Weather API response: '{weather_resp.text.strip()}'")
+            print(f"weather_data updated: {weather_data}")
     except Exception:
         pass
+
+def weather_icon(condition):
+    icons = {
+        "Clear": "☀",
+        "Clouds": "☁",
+        "Rain": "☂",
+        "Snow": "❄",
+        "Thunderstorm": "⚡",
+        "Unknown": "?"
+    }
+    return icons.get(condition, "?")
+
+def get_simple_condition(raw_cond):
+    cond = raw_cond.lower()
+    if 'thunderstorm' in cond: return 'Thunderstorm'
+    if 'rain' in cond: return 'Rainy'
+    if 'cloud' in cond: return 'Cloudy'
+    if 'sun' in cond or 'clear' in cond: return 'Clear'
+    return 'N/A'
+
+def get_wind_direction_icon(direction):
+    wind_map = {
+    '↑': 'N', '↗': 'NE', '→': 'E', '↘': 'SE',
+    '↓': 'S', '↙': 'SW', '←': 'W', '↖': 'NW'
+    }
+    return wind_map.get(direction, '?')
 
 # --- SCREEN 0: GIANT CLOCK ---
 def screen_clock(draw):
     actual_time = datetime.datetime.now().strftime("%H:%M:%S")
     draw.text((0, 0), actual_time, font=font_large, fill=255)
-    draw.text((0, 20), f"Weather: {outdoor_temp}°C", font=font_small, fill=255)
+    draw.text((0, 20), f"Temp:{weather_data['temperature']} °C", font=font_small, fill=255)
+
+# --- SCREEN 1: WEATHER ---
+def weather_screen(draw):
+    draw.text((0, 0), f"{weather_data['temperature']}°C", font=font_large, fill=255)
+    font_icon = ImageFont.truetype("DejaVuSans.ttf", 16) 
+    draw.text((85, 0), f"{weather_icon(weather_data['condition'])}", font=font_icon, fill=255)
+    draw.text((85, 22), f"H: {weather_data['humidity']}", font=font_small, fill=255)    
+    draw.text((0, 22), f"W: {weather_data['wind_speed'][1:].replace('km/h', '')} {get_wind_direction_icon(weather_data['wind_speed'][0])}", font=font_small, fill=255)
     
-# --- SCREEN 1: PC PERFORMANCE ---
+# --- SCREEN 2: PC PERFORMANCE ---
 def screen_performance(draw):
     cpu_usage = psutil.cpu_percent()
     ram_usage = psutil.virtual_memory().percent
@@ -259,26 +336,26 @@ def screen_performance(draw):
     draw.rectangle((70, 24, 120, 29), outline=255, fill=0)
     draw.rectangle((70, 24, int(70 + (ram_usage / 2)), 29), outline=255, fill=255)
 
-# --- SCREEN 2: PC INTERNAL SENSORS ---
+# --- SCREEN 3: PC INTERNAL SENSORS ---
 def screen_sensors(draw):
     internal_temp = get_cpu_temp()
     draw.text((0, 0), "HARDWARE SENSORS:", font=font_small, fill=255)
     draw.text((0, 12), f"CPU Temp: {internal_temp}", font=font_small, fill=255)
     draw.text((0, 22), f"Up since: {boot_time_readable}", font=font_small, fill=255)
 
-# --- SCREEN 3: LOCAL NETWORK STATUS ---
+# --- SCREEN 4: LOCAL NETWORK STATUS ---
 def screen_network(draw):
     net_status = get_network_status()
     draw.text((0, 0), "LOCAL NETWORK:", font=font_small, fill=255)
     draw.text((0, 15), net_status, font=font_small, fill=255)
 
-# --- SCREEN 4: REAL-TIME NETWORK TRAFFIC ---
+# --- SCREEN 5: REAL-TIME NETWORK TRAFFIC ---
 def screen_nettraffic(draw):
     draw.text((0, 0), "NET TRAFFIC:", font=font_small, fill=255)
     draw.text((0, 12), f"Down: {mbps_download:.1f} Mbps", font=font_small, fill=255)
     draw.text((0, 22), f"Up:   {mbps_upload:.1f} Mbps", font=font_small, fill=255)
 
-# --- SCREEN 5: NEXT MEETING ---
+# --- SCREEN 6: NEXT MEETING ---
 def screen_calendar(draw):
     global scroll_x
     draw.text((0, 0), "NEXT MEETING:", font=font_small, fill=255)
@@ -294,9 +371,9 @@ def screen_calendar(draw):
     else:
         scroll_x = 0
 
-# Lista maestra de pantallas
 screens = [
     {"name": "clock", "draw": screen_clock, "timeout": 6, "enabled": True},
+    {"name": "weather", "draw": weather_screen, "timeout": 3, "enabled": True},
     {"name": "performance", "draw": screen_performance, "timeout": 3, "enabled": True},
     {"name": "sensors", "draw": screen_sensors, "timeout": 3, "enabled": True},
     {"name": "network", "draw": screen_network, "timeout": 3, "enabled": False},
@@ -323,26 +400,49 @@ if __name__ == "__main__":
 
     screens[5]["enabled"] = calendar_enabled
     active_screens = [s for s in screens if s["enabled"]]
+    update_weather()
 
     while True:
-        if time.time() - last_network_update > 300:
-            update_weather()
-            last_network_update = time.time()
-        calculate_network_speed()
-        
+        # 1. Definir qué pantalla queremos ver (La Prioridad)
         if shared_state["manual_mode"]:
-            for i, s in enumerate(active_screens):
-                if s["name"] == shared_state["target_screen"]:
-                    current_index = i
-                    break
+            # Modo Manual: Buscar la pantalla pedida
+            target = next((s for s in screens if s["name"] == shared_state["target_screen"]), None)
+            current_screen_cfg = target if target else screens[0]
         else:
-            if time.time() - shared_state["last_screen_change"] > active_screens[current_index]["timeout"]:
+            # Modo Auto: Calcular cuál sigue
+            try:
+                active_screens = [s for s in screens if s["enabled"]]
+                if not active_screens:
+                    time.sleep(1)
+                    continue
+            except Exception as e:
+                
+                print(f"[ERROR] AUTO MODE:Failed to get active screens: {e}")
+                continue
+
+            # Lógica de tiempo
+            try:
+                if time.time() - shared_state["last_screen_change"] > active_screens[current_index]["timeout"]:
+                    update_weather()                    
+                    last_network_update = time.time()
+                    current_index = (current_index + 1) % len(active_screens)
+                    shared_state["last_screen_change"] = time.time()
+                
+            except Exception as e:
+                print(f"[ERROR] TIME: Failed to update screen: {e}")
+                print(f"active_screens: {[s['name'] for s in active_screens]}, current_index: {current_index}")
                 current_index = (current_index + 1) % len(active_screens)
                 shared_state["last_screen_change"] = time.time()
-                scroll_x = 0
-        
-        current_screen_cfg = active_screens[current_index]
+                time.sleep(1)
+                continue
+            calculate_network_speed()
+
+            current_screen_cfg = active_screens[current_index]
+
+        # 2. RENDERIZADO (El único punto donde se dibuja)
         draw.rectangle((0, 0, oled.width, oled.height), outline=0, fill=0)
         current_screen_cfg["draw"](draw)
         oled.image(image)
         oled.show()
+        
+        time.sleep(0.1)
