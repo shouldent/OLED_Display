@@ -4,6 +4,7 @@ import microcontroller
 sys.modules['microcontroller.pin'] = microcontroller.pin
 microcontroller.pin.i2cPorts = ()
 # ------------------------------------------
+
 import os
 import time
 import datetime
@@ -14,6 +15,7 @@ import psutil
 import requests
 import subprocess
 import re
+import json
 from PIL import Image, ImageDraw, ImageFont
 
 # Adding libraries for Google Calendar API
@@ -23,15 +25,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-# ... después de tus imports ...
 from fastapi import FastAPI
 import uvicorn
-
-# Estado global para control externo
-shared_state = {
-    "manual_mode": False,
-    "target_screen": None
-}
 
 app = FastAPI()
 
@@ -52,6 +47,13 @@ weather_data = {
     "wind_speed": "--"
 }
 
+# Screen status
+shared_state = {
+    "manual_mode": False,
+    "target_screen": None,
+    "last_screen_change": time.time()
+}
+
 last_network_update = 0
 
 # --- NETWORK SPEED CONTROL VARIABLES ---
@@ -67,25 +69,21 @@ boot_time_readable = datetime.datetime.fromtimestamp(psutil.boot_time()).strftim
 i2c = busio.I2C(board.SCL, board.SDA)
 oled = adafruit_ssd1306.SSD1306_I2C(128, 32, i2c)
 
+# Font configuration
 font_large = ImageFont.truetype("fuente_reloj.ttf", 24)
 font_small = ImageFont.load_default()
+font_icon = ImageFont.truetype("DejaVuSans.ttf", 16)
+font_jarvis = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
 
-# Check if the credentials file exists before starting the calendar feature
+# Credentials configuration
 dir_path = os.path.dirname(os.path.realpath(__file__))
 credentials_path = os.path.join(dir_path, 'credentials.json')
 
-calendar_enabled = False
-
+# OLED configuration
 image = Image.new("1", (oled.width, oled.height))
 draw = ImageDraw.Draw(image)
 
 interrupt_event = threading.Event()
-
-shared_state = {
-    "manual_mode": False,
-    "target_screen": None,
-    "last_screen_change": time.time()
-}
 
 @app.post("/set-active/{screen_id}/{state}")
 async def set_active(screen_id: str, state: str):
@@ -94,13 +92,10 @@ async def set_active(screen_id: str, state: str):
         if s["name"] == screen_id:
             s["enabled"] = new_state
             break
+    status = {s['name']: s['enabled'] for s in screens}
+    with open("/home/aaron/.local/share/cinnamon/desklets/jarvis_control_v2@aaron/status.json", "w") as f:
+        json.dump(status, f)
     return {"message": "OK", "screen": screen_id, "enabled": new_state}
-
-# @app.post("/set-screen/{screen_name}")
-# async def set_screen(screen_name: str):
-#     shared_state["manual_mode"] = True
-#     shared_state["target_screen"] = screen_name
-#     return {"status": "success", "requested_screen": screen_name}
 
 @app.post("/set-screen/{screen_name}")
 async def set_screen(screen_name: str):
@@ -109,39 +104,46 @@ async def set_screen(screen_name: str):
     print(f"--- API RECIBIÓ: Manual mode ON, objetivo: {screen_name} ---")
     return {"status": "ok"}
 
-@app.post("/resume-auto")
-async def resume_auto():
-    global last_screen_change
-    shared_state["manual_mode"] = False
-    shared_state["last_screen_change"] = time.time()  # Reset timer to avoid instant switch
-    print("Resuming automatic screen rotation")
-    return {"status": "auto mode resumed"}
-
 @app.post("/set-mode/auto")
 async def set_mode_auto():
     shared_state["manual_mode"] = False
-    shared_state["last_screen_change"] = time.time() # Reseteamos el contador para que empiece de cero
+    shared_state["last_screen_change"] = time.time()
     return {"status": "auto_mode_active"}
 
-# En tu bucle, reemplaza time.sleep(segundos) por esto:
+def load_status():
+    try:
+        with open("/home/aaron/.local/share/cinnamon/desklets/jarvis_control_v2@aaron/status.json", "r") as f:
+            status = json.load(f)
+            for s in screens:
+                if s['name'] in status:
+                    s['enabled'] = status[s['name']]
+            print(f"Status Loaded: {status}")
+    except FileNotFoundError:
+        print("No existe status.json, usando valores por defecto.")
+
 def wait_or_interrupt(seconds):
-    # Esto espera 'seconds' a menos que alguien haga interrupt_event.set()
     interrupt_event.wait(seconds)
-    # Limpiamos el evento para la próxima vuelta
     interrupt_event.clear()
 
 def run_server():
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 def show_splash():
-    # Cargar la imagen directamente al objeto de imagen de la pantalla
     splash = Image.open('splash_welcome.bmp').convert('1')
     oled.image(splash)
     oled.show()
     time.sleep(3)
     image = Image.new("1", (oled.width, oled.height))
-    draw = ImageDraw.Draw(image) # Tiempo que dura el logo
+    draw = ImageDraw.Draw(image)
 
+def boot_animation(draw):
+    message = "WELCOME SIR"
+    for i in range(len(message) + 1):
+        draw.text((0, 10), message[:i], font=font_jarvis, fill=255)
+        oled.image(image)
+        oled.show()
+        time.sleep(0.08)
+        
 def update_calendar_loop():
     global next_meeting_title, next_meeting_time
     while True:
@@ -176,21 +178,17 @@ def update_calendar_loop():
                 
                 next_meeting_title = summary
                 
-                # --- AQUÍ ESTÁ EL AJUSTE INGLÉS ---
                 if 'T' in start:
-                    # Dividimos fecha y hora (ej: "2026-06-07T18:00:00")
                     date_part, time_part = start.split('T')
-                    time_str = time_part[:5]  # Extrae "18:00"
+                    time_str = time_part[:5]
                     
-                    # Obtenemos la fecha de hoy en formato local (YYYY-MM-DD)
                     today_str = datetime.datetime.now().strftime('%Y-%m-%d')
                     
                     if date_part == today_str:
                         next_meeting_time = f"Today {time_str}"
                     else:
-                        # Si es otro día, parseamos para mostrar las primeras letras del día (ej: "Sun")
                         event_date = datetime.datetime.strptime(date_part, '%Y-%m-%d')
-                        day_name = event_date.strftime('%a') # "Sun", "Mon", etc.
+                        day_name = event_date.strftime('%a')
                         next_meeting_time = f"{day_name} {time_str}"
                 else:
                     next_meeting_time = "All day event"
@@ -202,7 +200,6 @@ def update_calendar_loop():
             next_meeting_title = "Calendar Error"
             next_meeting_time = ""
             
-        # Wait 10 minutes (600 seconds) before checking Google Calendar again
         time.sleep(600)
 
 def calculate_network_speed():
@@ -211,19 +208,16 @@ def calculate_network_speed():
     
     current_time = time.time()
     dt = current_time - prev_network_time
-    if dt < 0.1: return # Avoid division by zero
+    if dt < 0.1: return
     
     net_data = psutil.net_io_counters()
     
-    # Calculate bytes difference
     bytes_download = net_data.bytes_recv - last_bytes_recv
     bytes_upload = net_data.bytes_sent - last_bytes_sent
     
-    # Convert Bytes/sec to Megabits/sec (Mbps) -> (Bytes * 8) / (1024 * 1024)
     mbps_download = (bytes_download * 8) / (1024 * 1024) / dt
     mbps_upload = (bytes_upload * 8) / (1024 * 1024) / dt
     
-    # Update variables for the next iteration
     last_bytes_recv = net_data.bytes_recv
     last_bytes_sent = net_data.bytes_sent
     prev_network_time = current_time
@@ -236,7 +230,6 @@ def get_network_status():
     
     for name, info in interfaces.items():
         if info.isup:
-            # Filter common Linux network interface names
             if name.startswith('en') or name.startswith('eth'):
                 ethernet_ok = True
             elif name.startswith('wl'):
@@ -245,7 +238,6 @@ def get_network_status():
     if ethernet_ok:
         return "Cable (Ethernet)"
     elif wifi_ok:
-        # Attempt to get the WiFi network name (SSID) on Linux
         try:
             ssid = subprocess.check_output(["iwgetid", "-r"], text=True).strip()
             return f"Wi-Fi: {ssid}" if ssid else "Wi-Fi: Connected"
@@ -263,6 +255,14 @@ def get_cpu_temp():
         pass
     return "N/A"
 
+def get_gpu_temp():
+    try:
+        cmd = ["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader"]
+        temp = subprocess.check_output(cmd, text=True).strip()
+        return f"{temp} oC"
+    except Exception:
+        return "N/A"
+
 def update_weather():
     global weather_data
     try:
@@ -274,28 +274,28 @@ def update_weather():
             weather_data["condition"] = get_simple_condition(data[1])
             weather_data["humidity"] = data[2]
             weather_data["wind_speed"] = data[3]
-
-            print(f"Weather API response: '{weather_resp.text.strip()}'")
-            print(f"weather_data updated: {weather_data}")
+        else:
+            print(f"update_weather: {weather_resp.status_code}")
     except Exception:
         pass
 
 def weather_icon(condition):
     icons = {
         "Clear": "☀",
-        "Clouds": "☁",
-        "Rain": "☂",
+        "Cloudy": "☁",
+        "Rainy": "☂",
         "Snow": "❄",
         "Thunderstorm": "⚡",
-        "Unknown": "?"
+        "Overcast": "☁",
+        "Unknown": ""
     }
-    return icons.get(condition, "?")
+    return icons.get(condition, condition)
 
 def get_simple_condition(raw_cond):
-    cond = raw_cond.lower()
+    cond = raw_cond.lower().strip()
     if 'thunderstorm' in cond: return 'Thunderstorm'
     if 'rain' in cond: return 'Rainy'
-    if 'cloud' in cond: return 'Cloudy'
+    if 'cloud' or 'overcast' in cond: return 'Cloudy'
     if 'sun' in cond or 'clear' in cond: return 'Clear'
     return 'N/A'
 
@@ -310,16 +310,20 @@ def get_wind_direction_icon(direction):
 def screen_clock(draw):
     actual_time = datetime.datetime.now().strftime("%H:%M:%S")
     draw.text((0, 0), actual_time, font=font_large, fill=255)
-    draw.text((0, 20), f"Temp:{weather_data['temperature']} °C", font=font_small, fill=255)
-
+    draw.text((0, 20), f"Temp: {weather_data['temperature']} °C", font=font_small, fill=255)
+    
+    if shared_state["manual_mode"]:
+        draw.text((120, 0), "📌", font=font_small, fill=255)
 # --- SCREEN 1: WEATHER ---
 def weather_screen(draw):
     draw.text((0, 0), f"{weather_data['temperature']}°C", font=font_large, fill=255)
-    font_icon = ImageFont.truetype("DejaVuSans.ttf", 16) 
     draw.text((85, 0), f"{weather_icon(weather_data['condition'])}", font=font_icon, fill=255)
     draw.text((85, 22), f"H: {weather_data['humidity']}", font=font_small, fill=255)    
     draw.text((0, 22), f"W: {weather_data['wind_speed'][1:].replace('km/h', '')} {get_wind_direction_icon(weather_data['wind_speed'][0])}", font=font_small, fill=255)
     
+    if shared_state["manual_mode"]:
+        draw.text((120, 0), "📌" , font=font_small, fill=255)
+
 # --- SCREEN 2: PC PERFORMANCE ---
 def screen_performance(draw):
     cpu_usage = psutil.cpu_percent()
@@ -336,12 +340,19 @@ def screen_performance(draw):
     draw.rectangle((70, 24, 120, 29), outline=255, fill=0)
     draw.rectangle((70, 24, int(70 + (ram_usage / 2)), 29), outline=255, fill=255)
 
+    if shared_state["manual_mode"]:
+        draw.text((120, 0), "📌" , font=font_small, fill=255)
+
 # --- SCREEN 3: PC INTERNAL SENSORS ---
 def screen_sensors(draw):
     internal_temp = get_cpu_temp()
+    gpu_temp = get_gpu_temp()
     draw.text((0, 0), "HARDWARE SENSORS:", font=font_small, fill=255)
-    draw.text((0, 12), f"CPU Temp: {internal_temp}", font=font_small, fill=255)
-    draw.text((0, 22), f"Up since: {boot_time_readable}", font=font_small, fill=255)
+    draw.text((0, 12), f"CPU Temp: {internal_temp.split()[0]} °C", font=font_small, fill=255)
+    draw.text((0, 22), f"GPU Temp: {gpu_temp.split()[0]} °C", font=font_small, fill=255)
+
+    if shared_state["manual_mode"]:
+        draw.text((120, 0), "📌" , font=font_small, fill=255)
 
 # --- SCREEN 4: LOCAL NETWORK STATUS ---
 def screen_network(draw):
@@ -349,11 +360,17 @@ def screen_network(draw):
     draw.text((0, 0), "LOCAL NETWORK:", font=font_small, fill=255)
     draw.text((0, 15), net_status, font=font_small, fill=255)
 
+    if shared_state["manual_mode"]:
+        draw.text((120, 0), "📌" , font=font_small, fill=255)
+
 # --- SCREEN 5: REAL-TIME NETWORK TRAFFIC ---
 def screen_nettraffic(draw):
     draw.text((0, 0), "NET TRAFFIC:", font=font_small, fill=255)
     draw.text((0, 12), f"Down: {mbps_download:.1f} Mbps", font=font_small, fill=255)
     draw.text((0, 22), f"Up:   {mbps_upload:.1f} Mbps", font=font_small, fill=255)
+
+    if shared_state["manual_mode"]:
+        draw.text((120, 0), "📌" , font=font_small, fill=255)
 
 # --- SCREEN 6: NEXT MEETING ---
 def screen_calendar(draw):
@@ -371,47 +388,52 @@ def screen_calendar(draw):
     else:
         scroll_x = 0
 
+    if shared_state["manual_mode"]:
+        draw.text((120, 0), "📌" , font=font_small, fill=255)
+
 screens = [
     {"name": "clock", "draw": screen_clock, "timeout": 6, "enabled": True},
     {"name": "weather", "draw": weather_screen, "timeout": 3, "enabled": True},
-    {"name": "performance", "draw": screen_performance, "timeout": 3, "enabled": True},
-    {"name": "sensors", "draw": screen_sensors, "timeout": 3, "enabled": True},
+    {"name": "performance", "draw": screen_performance, "timeout": 3, "enabled": False},
+    {"name": "sensors", "draw": screen_sensors, "timeout": 3, "enabled": False},
     {"name": "network", "draw": screen_network, "timeout": 3, "enabled": False},
-    {"name": "net-traffic", "draw": screen_nettraffic, "timeout": 3, "enabled": True},
-    {"name": "calendar", "draw": screen_calendar, "timeout": 8, "enabled": calendar_enabled}
+    {"name": "net-traffic", "draw": screen_nettraffic, "timeout": 3, "enabled": False},
+    {"name": "calendar", "draw": screen_calendar, "timeout": 8, "enabled": True}
 ]
 
 active_screens = [s for s in screens if s["enabled"]]
 current_index = 0
 scroll_x = 0
 current_screen = 0
+typing_counter = 0
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
-
+    load_status()
+    
+    #--- You can choose  what SPLASH screen you want to use
+    # boot_animation(draw)
     show_splash()
+    # ---
+
     draw.rectangle((0, 0, oled.width, oled.height), outline=0, fill=0)
 
     if os.path.exists(credentials_path):
-        calendar_enabled = True
         threading.Thread(target=update_calendar_loop, daemon=True).start()
     else:
         print("[WARNING] credentials.json not found. Calendar screen will be skipped.")
 
-    screens[5]["enabled"] = calendar_enabled
     active_screens = [s for s in screens if s["enabled"]]
     update_weather()
 
     while True:
-        # 1. Definir qué pantalla queremos ver (La Prioridad)
         if shared_state["manual_mode"]:
-            # Modo Manual: Buscar la pantalla pedida
             target = next((s for s in screens if s["name"] == shared_state["target_screen"]), None)
             current_screen_cfg = target if target else screens[0]
         else:
-            # Modo Auto: Calcular cuál sigue
             try:
                 active_screens = [s for s in screens if s["enabled"]]
+                # print(f"Active screens: {[s['name'] for s in active_screens]}")
                 if not active_screens:
                     time.sleep(1)
                     continue
@@ -420,7 +442,6 @@ if __name__ == "__main__":
                 print(f"[ERROR] AUTO MODE:Failed to get active screens: {e}")
                 continue
 
-            # Lógica de tiempo
             try:
                 if time.time() - shared_state["last_screen_change"] > active_screens[current_index]["timeout"]:
                     update_weather()                    
@@ -430,7 +451,7 @@ if __name__ == "__main__":
                 
             except Exception as e:
                 print(f"[ERROR] TIME: Failed to update screen: {e}")
-                print(f"active_screens: {[s['name'] for s in active_screens]}, current_index: {current_index}")
+                # print(f"active_screens: {[s['name'] for s in active_screens]}, current_index: {current_index}")
                 current_index = (current_index + 1) % len(active_screens)
                 shared_state["last_screen_change"] = time.time()
                 time.sleep(1)
@@ -439,7 +460,6 @@ if __name__ == "__main__":
 
             current_screen_cfg = active_screens[current_index]
 
-        # 2. RENDERIZADO (El único punto donde se dibuja)
         draw.rectangle((0, 0, oled.width, oled.height), outline=0, fill=0)
         current_screen_cfg["draw"](draw)
         oled.image(image)
