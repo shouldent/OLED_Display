@@ -4,10 +4,14 @@ A real-time hardware and network traffic monitor for Linux, designed to run on a
 
 ## Features
 * **Digital Clock:** Large, easy-to-read time format.
+* **Waether:** Featuring temperature,  condition, wind and humidity
 * **System Performance:** Dynamic progress bars for CPU and RAM usage.
 * **Hardware Sensors:** Real-time CPU temperature (`Tctl`) and system uptime.
 * **Local Network Status:** Auto-detects active connections (Ethernet or Wi-Fi with SSID).
 * **Live Network Traffic:** Real-time download and upload speed measured locally in Mbps.
+* **Google Calendar:** Shows the next meeting in your calendar
+
+* **Desklet (Optional):** Featuring a desklet with autoscrolling mode and manual mode
 
 ## Hardware Requirements
 * SSD1306 I2C OLED Display (128x32)
@@ -72,7 +76,7 @@ To enable the next meeting display on screen 5:
 3. Place `credentials.json` in the root directory of this project.
 4. Run the script; it will prompt you to authenticate via browser on the first run.
 
-## 5. Jarvis OLED Dashboard
+## 5. Desklet
 
 An autonomous OLED display system for Linux PCs, featuring a built-in API and a sleek Cinnamon Desktop integration.
 
@@ -89,30 +93,14 @@ Ensure you have the necessary dependencies installed:
 ```bash
 pip install adafruit-blinka psutil requests fastapi uvicorn google-api-python-client
 ```
-#### 2. Running as a System Service
 
-To ensure the script runs automatically at startup, create a service file:
-```bash
-udo nano /etc/systemd/system/jarvis-oled.service
+Ensure the script runs automatically at startup.
 
-[Unit]
-Description=Jarvis OLED Display Service
-After=network.target
-
-[Service]
-User=your_username
-WorkingDirectory=/path/to/your/OLED_Display
-Environment=BLINKA_FT232H=1
-ExecStart=/path/to/your/OLED_Display/venv/bin/python OLED_full.py
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
+See section [`2. Configure the Linux Service (Systemd)`](#2-configure-the-linux-service-systemd)
 
 _Don't forget to replace **your_username** and paths._
 
-#### 3. Cinnamon Desklet Integration
+#### 2. Cinnamon Desklet Integration
 
 You can control the OLED screen directly from your desktop.
 
@@ -120,7 +108,7 @@ You can control the OLED screen directly from your desktop.
 2. Activate: Right-click on your desktop -> "Add Desklets" -> Select "Jarvis Control".
 3. Customize: Edit stylesheet.css inside the desklet folder to adjust the interface (colors, borders, transparency).
 
-#### 4. Configuration
+#### 3. Configuration
 
 1. Hardware: If you are using a USB-I2C adapter, ensure the correct BLINKA environment variable is set in your service file.
 2. Calendar: Place your credentials.json in the project root to enable the calendar screen.
